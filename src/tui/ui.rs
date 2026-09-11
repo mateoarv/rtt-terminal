@@ -6,6 +6,7 @@ use ratatui::widgets::{
 };
 use ratatui::Frame;
 
+use super::ansi::parse_ansi_to_line;
 use super::app::AppState;
 
 pub fn render(frame: &mut Frame, state: &mut AppState) {
@@ -110,7 +111,17 @@ fn render_logs(frame: &mut Frame, state: &mut AppState, area: ratatui::layout::R
         state
             .logs
             .range(start_idx..end_idx)
-            .map(|text| Line::from(Span::raw(text)))
+            .map(|entry| {
+                let mut line = parse_ansi_to_line(&entry.raw_text);
+                if state.timestamps_enabled {
+                    let ts_span = Span::styled(
+                        format!("[{}] ", entry.timestamp),
+                        Style::default().fg(Color::DarkGray),
+                    );
+                    line.spans.insert(0, ts_span);
+                }
+                line
+            })
             .collect()
     };
 

@@ -1,6 +1,32 @@
 use std::collections::VecDeque;
 
+use crate::logging::FileLogger;
+
 pub const DEFAULT_MAX_LOGS: usize = 10_000;
+
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub raw_text: String,
+}
+
+impl LogEntry {
+    pub fn new(raw_text: String) -> Self {
+        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+        Self {
+            timestamp,
+            raw_text,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_timestamp(timestamp: String, raw_text: String) -> Self {
+        Self {
+            timestamp,
+            raw_text,
+        }
+    }
+}
 
 pub struct AppState {
     pub probe_name: String,
@@ -11,9 +37,10 @@ pub struct AppState {
     pub timestamps_enabled: bool,
     pub auto_reconnect_enabled: bool,
     pub log_file: Option<String>,
+    pub file_logger: Option<FileLogger>,
 
     // Log buffer
-    pub logs: VecDeque<String>,
+    pub logs: VecDeque<LogEntry>,
     pub max_logs: usize,
     pub scroll_offset: usize, // Lines scrolled up from the bottom (0 = at the latest line)
     pub auto_scroll: bool,
@@ -37,16 +64,20 @@ impl AppState {
         target_name: String,
         active_channel: usize,
         eol: String,
+        timestamps_enabled: bool,
+        file_logger: Option<FileLogger>,
     ) -> Self {
+        let log_file = file_logger.as_ref().map(|l| l.path_str());
         Self {
             probe_name,
             target_name,
             core_status: "RUNNING".to_string(),
             active_channel,
             eol,
-            timestamps_enabled: true,
+            timestamps_enabled,
             auto_reconnect_enabled: true,
-            log_file: None,
+            log_file,
+            file_logger,
 
             logs: VecDeque::with_capacity(1024),
             max_logs: DEFAULT_MAX_LOGS,
@@ -82,13 +113,18 @@ impl AppState {
 
     /// Appends a single line to the log buffer.
     pub fn add_log_line(&mut self, line: String) {
+        let entry = LogEntry::new(line);
+        if let Some(ref logger) = self.file_logger {
+            logger.log(&entry.timestamp, &entry.raw_text);
+        }
+
         let popped = if self.logs.len() >= self.max_logs {
             self.logs.pop_front();
             true
         } else {
             false
         };
-        self.logs.push_back(line);
+        self.logs.push_back(entry);
 
         if self.auto_scroll {
             self.scroll_offset = 0;
@@ -251,6 +287,8 @@ mod tests {
             "nRF52840_xxAA".to_string(),
             0,
             "CRLF".to_string(),
+            true,
+            None,
         );
         state.max_logs = 5;
 
@@ -259,8 +297,8 @@ mod tests {
         }
 
         assert_eq!(state.logs.len(), 5);
-        assert_eq!(state.logs.front().unwrap(), "Line 5");
-        assert_eq!(state.logs.back().unwrap(), "Line 9");
+        assert_eq!(state.logs.front().unwrap().raw_text, "Line 5");
+        assert_eq!(state.logs.back().unwrap().raw_text, "Line 9");
     }
 
     #[test]
@@ -270,6 +308,8 @@ mod tests {
             "nRF52840_xxAA".to_string(),
             0,
             "CRLF".to_string(),
+            true,
+            None,
         );
 
         state.insert_char('h');
@@ -300,6 +340,8 @@ mod tests {
             "nRF52840_xxAA".to_string(),
             0,
             "CRLF".to_string(),
+            true,
+            None,
         );
         state.viewport_height = 10;
 
@@ -330,5 +372,16 @@ mod tests {
         state.scroll_down(50);
         assert_eq!(state.scroll_offset, 0);
         assert!(state.auto_scroll); // Auto-scroll re-engages
+    }
+
+    #[test]
+    fn test_log_entry_timestamp_format() {
+        let entry = LogEntry::new("Hello RTT".to_string());
+        assert_eq!(entry.raw_text, "Hello RTT");
+        // Timestamp format HH:MM:SS.mmm has length 12 (e.g. 16:05:30.123)
+        assert_eq!(entry.timestamp.len(), 12);
+        assert_eq!(&entry.timestamp[2..3], ":");
+        assert_eq!(&entry.timestamp[5..6], ":");
+        assert_eq!(&entry.timestamp[8..9], ".");
     }
 }

@@ -42,6 +42,14 @@ pub struct Cli {
     /// Run in basic headless console mode instead of TUI
     #[arg(long = "headless")]
     pub headless: bool,
+
+    /// Enable timestamps prefix for each log line in the viewport
+    #[arg(short = 't', long = "timestamps")]
+    pub timestamps: bool,
+
+    /// Log session to a file on disk in background
+    #[arg(short = 'L', long = "log")]
+    pub log: Option<String>,
 }
 
 #[cfg(test)]
@@ -69,5 +77,13 @@ mod tests {
         let args = vec!["rtt-terminal", "-S", "nrf52840"];
         let cli = Cli::parse_from(args);
         assert_eq!(cli.search_chip.as_deref(), Some("nrf52840"));
+    }
+
+    #[test]
+    fn test_cli_timestamps_and_log_flags() {
+        let args = vec!["rtt-terminal", "-t", "-L", "session.log"];
+        let cli = Cli::parse_from(args);
+        assert!(cli.timestamps);
+        assert_eq!(cli.log.as_deref(), Some("session.log"));
     }
 }

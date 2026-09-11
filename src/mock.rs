@@ -33,14 +33,14 @@ pub fn start_mock_worker() -> Result<RttWorkerHandle> {
         });
 
         let initial_messages = [
-            "[00:00:00.001] <info> boot: Device booted from flash\r\n",
-            "[00:00:00.005] <info> clock: HFCLK running at 64 MHz\r\n",
-            "[00:00:00.120] <info> app: System initialized. Firmware v2.1.0\r\n",
-            "[00:00:00.125] <info> sensor: Calibrating IMU sensor...\r\n",
-            "[00:00:00.350] <info> sensor: IMU OK (Offset: 0.02, -0.01, 1.00)\r\n",
-            "[00:00:01.000] <warning> ble: Waiting for BLE connection...\r\n",
-            "[00:00:02.450] <info> ble: Connected to peer 4A:21:88:9C:12:00\r\n",
-            "[00:00:02.455] <info> net: MTU exchanged: 247 bytes\r\n",
+            "\x1b[1;32m<info>\x1b[0m \x1b[1mboot:\x1b[0m Device booted from internal flash\r\n",
+            "\x1b[1;32m<info>\x1b[0m \x1b[1mclock:\x1b[0m HFCLK running at 64 MHz, LFCLK calibrated (32.768 kHz)\r\n",
+            "\x1b[1;32m<info>\x1b[0m \x1b[1mapp:\x1b[0m System initialized. Firmware v2.1.0-alpha [Zephyr RTOS]\r\n",
+            "\x1b[1;32m<info>\x1b[0m \x1b[1msensor:\x1b[0m Calibrating 6-axis IMU (LSM6DSOX)...\r\n",
+            "\x1b[1;32m<info>\x1b[0m \x1b[1msensor:\x1b[0m IMU OK (Accel: +0.02, -0.01, +0.98 g)\r\n",
+            "\x1b[1;33m<warning>\x1b[0m \x1b[1mble:\x1b[0m Advertising on channel 37, 38, 39... Waiting for peer\r\n",
+            "\x1b[1;32m<info>\x1b[0m \x1b[1mble:\x1b[0m Connected to central 4A:21:88:9C:12:00 (Interval: 15ms)\r\n",
+            "\x1b[1;36m<debug>\x1b[0m \x1b[1mnet:\x1b[0m MTU exchange complete: 247 bytes\r\n",
         ];
 
         for msg in initial_messages {
@@ -60,7 +60,7 @@ pub fn start_mock_worker() -> Result<RttWorkerHandle> {
                     RttCommand::Write(channel, bytes) => {
                         let text = String::from_utf8_lossy(&bytes);
                         let response = format!(
-                            "[mock-firmware] Received command on CH{}: \"{}\"\r\n",
+                            "\x1b[36m[mock-firmware]\x1b[0m Received command on CH{}: \"\x1b[1m{}\x1b[0m\"\r\n",
                             channel,
                             text.trim_end()
                         );
@@ -72,19 +72,19 @@ pub fn start_mock_worker() -> Result<RttWorkerHandle> {
                     RttCommand::Reset => {
                         let _ = event_tx.send(RttEvent::Data {
                             channel: 0,
-                            data: b"[mock-firmware] *** Target Reset Triggered ***\r\n".to_vec(),
+                            data: b"\x1b[1;33m[mock-firmware] *** Target Reset Triggered ***\x1b[0m\r\n".to_vec(),
                         });
                     }
                     RttCommand::Halt => {
                         let _ = event_tx.send(RttEvent::Data {
                             channel: 0,
-                            data: b"[mock-firmware] Target Halted.\r\n".to_vec(),
+                            data: b"\x1b[1;33m[mock-firmware] Target Halted.\x1b[0m\r\n".to_vec(),
                         });
                     }
                     RttCommand::Run => {
                         let _ = event_tx.send(RttEvent::Data {
                             channel: 0,
-                            data: b"[mock-firmware] Target Resumed.\r\n".to_vec(),
+                            data: b"\x1b[1;32m[mock-firmware] Target Resumed.\x1b[0m\r\n".to_vec(),
                         });
                     }
                     RttCommand::Stop => {
@@ -93,19 +93,27 @@ pub fn start_mock_worker() -> Result<RttWorkerHandle> {
                 }
             }
 
-            // Periodic telemetry log simulation
+            // Periodic telemetry log simulation with ANSI colors
             counter += 1;
             let temp = 22.0 + (counter % 10) as f32 * 0.4;
             let batt = 4.15 - (counter % 30) as f32 * 0.01;
-            let telemetry = format!(
-                "[{:02}:{:02}:{:02}.000] <debug> telemetry: Batt={:.2}V, Temp={:.1}C, Packet #{}\r\n",
-                (counter / 3600) % 24,
-                (counter / 60) % 60,
-                counter % 60,
-                batt,
-                temp,
-                counter
-            );
+
+            let telemetry = if counter % 15 == 0 {
+                format!(
+                    "\x1b[1;33m<warning>\x1b[0m \x1b[1mpower:\x1b[0m Battery voltage threshold: \x1b[33m{:.2}V\x1b[0m\r\n",
+                    batt
+                )
+            } else if counter % 28 == 0 {
+                format!(
+                    "\x1b[1;31m<error>\x1b[0m \x1b[1mble:\x1b[0m Packet CRC check failed on conn event #\x1b[31m{}\x1b[0m\r\n",
+                    counter
+                )
+            } else {
+                format!(
+                    "\x1b[1;36m<debug>\x1b[0m \x1b[1mtelemetry:\x1b[0m Batt=\x1b[32m{:.2}V\x1b[0m, Temp=\x1b[33m{:.1}C\x1b[0m, Seq=#\x1b[35m{}\x1b[0m\r\n",
+                    batt, temp, counter
+                )
+            };
 
             let _ = event_tx.send(RttEvent::Data {
                 channel: 0,

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::thread;
 
 mod cli;
+mod logging;
 mod mock;
 mod probe;
 mod tui;
@@ -31,13 +32,25 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Helper to initialize file logger if requested
+    let create_logger = |path: &Option<String>| -> Result<Option<logging::FileLogger>> {
+        if let Some(p) = path {
+            Ok(Some(logging::FileLogger::start(p)?))
+        } else {
+            Ok(None)
+        }
+    };
+
     // 1. Mock Mode (Simulated TUI)
     if args.mock {
+        let file_logger = create_logger(&args.log)?;
         let state = AppState::new(
             "Mock-JLink (SN: 99999999)".to_string(),
             "nRF52840_xxAA [Simulated]".to_string(),
             args.channel,
             args.eol,
+            args.timestamps,
+            file_logger,
         );
         let worker = mock::start_mock_worker()?;
         let terminal = tui::init_terminal()?;
@@ -56,11 +69,14 @@ fn main() -> Result<()> {
         }
 
         // Default: Full Interactive TUI
+        let file_logger = create_logger(&args.log)?;
         let state = AppState::new(
             "J-Link".to_string(),
             target.name.clone(),
             args.channel,
             args.eol,
+            args.timestamps,
+            file_logger,
         );
 
         let worker = start_rtt_worker(
