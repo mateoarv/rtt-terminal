@@ -1,0 +1,12 @@
+[package]
+name = "rtt-terminal"
+version = "0.1.0"
+edition = "2024"
+authors = ["Samay"]
+description = "High-performance interactive RTT terminal for microcontrollers via debug probes"
+
+[dependencies]
+probe-rs = { version = "0.32", default-features = true }
+clap = { version = "4.6", features = ["derive"] }
+fuzzy-matcher = "0.3.7"
+anyhow = "1.0"
