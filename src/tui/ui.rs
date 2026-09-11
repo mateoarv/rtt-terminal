@@ -6,7 +6,7 @@ use ratatui::widgets::{
 };
 use ratatui::Frame;
 
-use super::ansi::parse_ansi_to_line;
+use super::ansi::{parse_ansi_to_line, strip_ansi};
 use super::app::AppState;
 
 pub fn render(frame: &mut Frame, state: &mut AppState) {
@@ -99,7 +99,7 @@ fn render_logs(frame: &mut Frame, state: &mut AppState, area: ratatui::layout::R
         .border_style(Style::default().fg(Color::DarkGray));
 
     // Slice visible lines based on effective_scroll
-    let lines_to_render: Vec<Line> = if total_logs == 0 {
+    let mut lines_to_render: Vec<Line> = if total_logs == 0 && state.incoming_buffer.is_empty() {
         vec![Line::from(Span::styled(
             "Waiting for RTT output from microcontroller...",
             Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
@@ -124,6 +124,18 @@ fn render_logs(frame: &mut Frame, state: &mut AppState, area: ratatui::layout::R
             })
             .collect()
     };
+
+    // If viewing the bottom of the logs, render any in-progress incoming text (e.g. prompt "rtt:~$ ")
+    if (state.auto_scroll || effective_scroll == 0) && !state.incoming_buffer.is_empty() {
+        let stripped = strip_ansi(&state.incoming_buffer);
+        if !stripped.trim().is_empty() {
+            let line = parse_ansi_to_line(&state.incoming_buffer);
+            lines_to_render.push(line);
+            if lines_to_render.len() > visible_height {
+                lines_to_render.remove(0);
+            }
+        }
+    }
 
     let paragraph = Paragraph::new(lines_to_render).block(block);
     frame.render_widget(paragraph, area);

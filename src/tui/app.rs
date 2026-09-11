@@ -45,7 +45,7 @@ pub struct AppState {
     pub scroll_offset: usize, // Lines scrolled up from the bottom (0 = at the latest line)
     pub auto_scroll: bool,
     pub viewport_height: usize,
-    incoming_buffer: String,
+    pub incoming_buffer: String,
 
     // Input prompt state
     pub input: String,
@@ -383,5 +383,42 @@ mod tests {
         assert_eq!(&entry.timestamp[2..3], ":");
         assert_eq!(&entry.timestamp[5..6], ":");
         assert_eq!(&entry.timestamp[8..9], ".");
+    }
+
+    #[test]
+    fn test_incoming_buffer_and_zephyr_logs() {
+        use crate::tui::ansi::{parse_ansi_to_line, strip_ansi};
+
+        let mut state = AppState::new(
+            "TestProbe".to_string(),
+            "nRF52840_xxAA".to_string(),
+            0,
+            "CRLF".to_string(),
+            false,
+            None,
+        );
+
+        // Target sends prompt without newline
+        state.add_log_bytes(b"rtt:~$ ");
+        assert_eq!(state.incoming_buffer, "rtt:~$ ");
+        assert_eq!(state.logs.len(), 0);
+
+        // Target sends log with erase sequence + newline
+        state.add_log_bytes(b"\x1b[7D\x1b[J*** Booting Zephyr OS build v3.5.0 ***\r\n");
+        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.incoming_buffer, "");
+
+        // Verify erased prompt is not in parsed or stripped line
+        let clean = strip_ansi(&state.logs[0].raw_text);
+        assert_eq!(clean, "*** Booting Zephyr OS build v3.5.0 ***");
+
+        let line = parse_ansi_to_line(&state.logs[0].raw_text);
+        let parsed_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(parsed_text, "*** Booting Zephyr OS build v3.5.0 ***");
+
+        // Target leaves final prompt in buffer
+        state.add_log_bytes(b"rtt:~$ ");
+        assert_eq!(state.incoming_buffer, "rtt:~$ ");
+        assert_eq!(strip_ansi(&state.incoming_buffer), "rtt:~$ ");
     }
 }

@@ -4,109 +4,13 @@ use ratatui::text::{Line, Span};
 /// Converts an ANSI-encoded string into a Ratatui `Line<'static>`.
 /// Supports standard colors (30-37, 90-97), background colors (40-47, 100-107),
 /// 256-color palette (38;5;n / 48;5;n), 24-bit RGB (38;2;r;g;b / 48;2;r;g;b),
-/// modifiers (bold, dim, italic, underline, reversed), and resets.
-/// Non-SGR escape sequences (e.g. cursor moves, clear line) are cleanly ignored.
+/// modifiers (bold, dim, italic, underline, reversed), resets,
+/// and terminal cursor manipulation / erasure (CUF, CUB, CHA, EL, ED, tabs).
 pub fn parse_ansi_to_line(text: &str) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut chars: Vec<(char, Style)> = Vec::new();
+    let mut cursor: usize = 0;
     let mut current_style = Style::default();
-    let mut current_chunk = String::new();
 
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    let len = bytes.len();
-
-    while i < len {
-        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            // Flush current accumulated text chunk before style change
-            if !current_chunk.is_empty() {
-                spans.push(Span::styled(
-                    std::mem::take(&mut current_chunk),
-                    current_style,
-                ));
-            }
-
-            // Move past '\x1b['
-            i += 2;
-            let start = i;
-
-            // Find the final command byte of the escape sequence (e.g., 'm', 'K', 'H')
-            while i < len && !bytes[i].is_ascii_alphabetic() {
-                i += 1;
-            }
-
-            if i < len {
-                let cmd = bytes[i];
-                let params_str = &text[start..i];
-                i += 1; // Move past command byte
-
-                // 'm' denotes SGR (Select Graphic Rendition)
-                if cmd == b'm' {
-                    apply_sgr_params(params_str, &mut current_style);
-                } else if cmd == b'C' {
-                    // CUF - Cursor Forward (Cursor Right by n columns)
-                    let count = if params_str.is_empty() {
-                        1
-                    } else {
-                        params_str.parse::<usize>().unwrap_or(1)
-                    };
-                    current_chunk.push_str(&" ".repeat(count));
-                } else if cmd == b'G' {
-                    // CHA - Cursor Horizontal Absolute (1-based)
-                    let current_col: usize = spans.iter().map(|s| s.content.chars().count()).sum::<usize>()
-                        + current_chunk.chars().count();
-                    let target_col = if params_str.is_empty() {
-                        0
-                    } else {
-                        params_str.parse::<usize>().unwrap_or(1).saturating_sub(1)
-                    };
-                    if target_col > current_col {
-                        current_chunk.push_str(&" ".repeat(target_col - current_col));
-                    }
-                } else if cmd == b'@' {
-                    // ICH - Insert Characters
-                    let count = if params_str.is_empty() {
-                        1
-                    } else {
-                        params_str.parse::<usize>().unwrap_or(1)
-                    };
-                    current_chunk.push_str(&" ".repeat(count));
-                }
-                // Other escape codes (like 'K' for clear line) are silently stripped
-            }
-        } else if bytes[i] == b'\t' {
-            let current_col: usize = spans.iter().map(|s| s.content.chars().count()).sum::<usize>()
-                + current_chunk.chars().count();
-            let next_tab = (current_col / 8 + 1) * 8;
-            current_chunk.push_str(&" ".repeat(next_tab - current_col));
-            i += 1;
-        } else if bytes[i] == b'\r' {
-            // Ignore carriage return
-            i += 1;
-        } else {
-            // Accumulate regular UTF-8 character
-            if let Some(ch) = text[i..].chars().next() {
-                current_chunk.push(ch);
-                i += ch.len_utf8();
-            } else {
-                i += 1;
-            }
-        }
-    }
-
-    if !current_chunk.is_empty() {
-        spans.push(Span::styled(current_chunk, current_style));
-    }
-
-    if spans.is_empty() {
-        Line::from(vec![Span::raw("")])
-    } else {
-        Line::from(spans)
-    }
-}
-
-/// Strips all ANSI escape sequences from a string, returning clean plain text.
-pub fn strip_ansi(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
     let bytes = text.as_bytes();
     let mut i = 0;
     let len = bytes.len();
@@ -115,56 +19,281 @@ pub fn strip_ansi(text: &str) -> String {
         if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
             i += 2;
             let start = i;
+
             while i < len && !bytes[i].is_ascii_alphabetic() {
                 i += 1;
             }
+
             if i < len {
                 let cmd = bytes[i];
                 let params_str = &text[start..i];
                 i += 1;
 
-                if cmd == b'C' {
-                    let count = if params_str.is_empty() {
-                        1
-                    } else {
-                        params_str.parse::<usize>().unwrap_or(1)
-                    };
-                    result.push_str(&" ".repeat(count));
-                } else if cmd == b'G' {
-                    let current_col = result.chars().count();
-                    let target_col = if params_str.is_empty() {
-                        0
-                    } else {
-                        params_str.parse::<usize>().unwrap_or(1).saturating_sub(1)
-                    };
-                    if target_col > current_col {
-                        result.push_str(&" ".repeat(target_col - current_col));
+                match cmd {
+                    b'm' => {
+                        apply_sgr_params(params_str, &mut current_style);
                     }
-                } else if cmd == b'@' {
-                    let count = if params_str.is_empty() {
-                        1
-                    } else {
-                        params_str.parse::<usize>().unwrap_or(1)
-                    };
-                    result.push_str(&" ".repeat(count));
+                    b'C' => {
+                        // CUF - Cursor Forward
+                        let n = if params_str.is_empty() {
+                            1
+                        } else {
+                            params_str.parse::<usize>().unwrap_or(1)
+                        };
+                        while chars.len() < cursor + n {
+                            chars.push((' ', Style::default()));
+                        }
+                        cursor += n;
+                    }
+                    b'D' => {
+                        // CUB - Cursor Back / Left
+                        let n = if params_str.is_empty() {
+                            1
+                        } else {
+                            params_str.parse::<usize>().unwrap_or(1)
+                        };
+                        cursor = cursor.saturating_sub(n);
+                    }
+                    b'G' => {
+                        // CHA - Cursor Horizontal Absolute (1-based)
+                        let col = if params_str.is_empty() {
+                            0
+                        } else {
+                            params_str.parse::<usize>().unwrap_or(1).saturating_sub(1)
+                        };
+                        while chars.len() < col {
+                            chars.push((' ', Style::default()));
+                        }
+                        cursor = col;
+                    }
+                    b'K' | b'J' => {
+                        // EL / ED - Erase in Line / Erase in Display
+                        let mode = if params_str.is_empty() {
+                            0
+                        } else {
+                            params_str.parse::<u8>().unwrap_or(0)
+                        };
+                        match mode {
+                            0 => {
+                                // Erase from cursor to end of line
+                                chars.truncate(cursor);
+                            }
+                            1 => {
+                                // Erase from beginning of line to cursor
+                                for j in 0..cursor.min(chars.len()) {
+                                    chars[j] = (' ', Style::default());
+                                }
+                            }
+                            2 => {
+                                // Erase entire line
+                                chars.clear();
+                                cursor = 0;
+                            }
+                            _ => {
+                                chars.truncate(cursor);
+                            }
+                        }
+                    }
+                    b'@' => {
+                        // ICH - Insert Character
+                        let n = if params_str.is_empty() {
+                            1
+                        } else {
+                            params_str.parse::<usize>().unwrap_or(1)
+                        };
+                        for _ in 0..n {
+                            if cursor <= chars.len() {
+                                chars.insert(cursor, (' ', Style::default()));
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         } else if bytes[i] == b'\t' {
-            let current_col = result.chars().count();
-            let next_tab = (current_col / 8 + 1) * 8;
-            result.push_str(&" ".repeat(next_tab - current_col));
+            let next_tab = (cursor / 8 + 1) * 8;
+            while chars.len() < next_tab {
+                chars.push((' ', Style::default()));
+            }
+            cursor = next_tab;
             i += 1;
         } else if bytes[i] == b'\r' {
+            if i + 1 < len && bytes[i + 1] == b'\n' {
+                i += 1;
+                continue;
+            }
+            cursor = 0;
+            i += 1;
+        } else if bytes[i] == b'\n' {
+            chars.push(('\n', Style::default()));
+            cursor = chars.len();
             i += 1;
         } else if let Some(ch) = text[i..].chars().next() {
-            result.push(ch);
+            if cursor < chars.len() {
+                chars[cursor] = (ch, current_style);
+            } else {
+                chars.push((ch, current_style));
+            }
+            cursor += 1;
             i += ch.len_utf8();
         } else {
             i += 1;
         }
     }
 
-    result
+    if chars.is_empty() {
+        return Line::from(vec![Span::raw("")]);
+    }
+
+    // Group consecutive characters with identical style into Spans
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut current_span_text = String::new();
+    let mut current_span_style = chars[0].1;
+
+    for (ch, style) in chars {
+        if style == current_span_style {
+            current_span_text.push(ch);
+        } else {
+            if !current_span_text.is_empty() {
+                spans.push(Span::styled(
+                    std::mem::take(&mut current_span_text),
+                    current_span_style,
+                ));
+            }
+            current_span_style = style;
+            current_span_text.push(ch);
+        }
+    }
+
+    if !current_span_text.is_empty() {
+        spans.push(Span::styled(current_span_text, current_span_style));
+    }
+
+    Line::from(spans)
+}
+
+/// Strips all ANSI escape sequences from a string, returning clean plain text,
+/// while faithfully emulating cursor movements (CUF, CUB, CHA, tabs) and erasures (EL, ED).
+pub fn strip_ansi(text: &str) -> String {
+    let mut chars: Vec<char> = Vec::new();
+    let mut cursor: usize = 0;
+
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let len = bytes.len();
+
+    while i < len {
+        if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
+            i += 2;
+            let start = i;
+
+            while i < len && !bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+
+            if i < len {
+                let cmd = bytes[i];
+                let params_str = &text[start..i];
+                i += 1;
+
+                match cmd {
+                    b'C' => {
+                        let n = if params_str.is_empty() {
+                            1
+                        } else {
+                            params_str.parse::<usize>().unwrap_or(1)
+                        };
+                        while chars.len() < cursor + n {
+                            chars.push(' ');
+                        }
+                        cursor += n;
+                    }
+                    b'D' => {
+                        let n = if params_str.is_empty() {
+                            1
+                        } else {
+                            params_str.parse::<usize>().unwrap_or(1)
+                        };
+                        cursor = cursor.saturating_sub(n);
+                    }
+                    b'G' => {
+                        let col = if params_str.is_empty() {
+                            0
+                        } else {
+                            params_str.parse::<usize>().unwrap_or(1).saturating_sub(1)
+                        };
+                        while chars.len() < col {
+                            chars.push(' ');
+                        }
+                        cursor = col;
+                    }
+                    b'K' | b'J' => {
+                        let mode = if params_str.is_empty() {
+                            0
+                        } else {
+                            params_str.parse::<u8>().unwrap_or(0)
+                        };
+                        match mode {
+                            0 => chars.truncate(cursor),
+                            1 => {
+                                for j in 0..cursor.min(chars.len()) {
+                                    chars[j] = ' ';
+                                }
+                            }
+                            2 => {
+                                chars.clear();
+                                cursor = 0;
+                            }
+                            _ => chars.truncate(cursor),
+                        }
+                    }
+                    b'@' => {
+                        let n = if params_str.is_empty() {
+                            1
+                        } else {
+                            params_str.parse::<usize>().unwrap_or(1)
+                        };
+                        for _ in 0..n {
+                            if cursor <= chars.len() {
+                                chars.insert(cursor, ' ');
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else if bytes[i] == b'\t' {
+            let next_tab = (cursor / 8 + 1) * 8;
+            while chars.len() < next_tab {
+                chars.push(' ');
+            }
+            cursor = next_tab;
+            i += 1;
+        } else if bytes[i] == b'\r' {
+            if i + 1 < len && bytes[i + 1] == b'\n' {
+                i += 1;
+                continue;
+            }
+            cursor = 0;
+            i += 1;
+        } else if bytes[i] == b'\n' {
+            chars.push('\n');
+            cursor = chars.len();
+            i += 1;
+        } else if let Some(ch) = text[i..].chars().next() {
+            if cursor < chars.len() {
+                chars[cursor] = ch;
+            } else {
+                chars.push(ch);
+            }
+            cursor += 1;
+            i += ch.len_utf8();
+        } else {
+            i += 1;
+        }
+    }
+
+    chars.into_iter().collect()
 }
 
 fn apply_sgr_params(params_str: &str, style: &mut Style) {
@@ -377,5 +506,16 @@ pub mod tests {
 
         let clean = strip_ansi(input);
         assert_eq!(clean, "cmd     arg");
+    }
+
+    #[test]
+    fn test_zephyr_prompt_erase_and_overwrite() {
+        let input = "\x1b[1;32mrtt:~$ \x1b[m\x1b[7D\x1b[J[00:00:00.015,777] <dbg> hsm: ENTRY(Advertising)";
+        let line = parse_ansi_to_line(input);
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(line.spans[0].content, "[00:00:00.015,777] <dbg> hsm: ENTRY(Advertising)");
+
+        let clean = strip_ansi(input);
+        assert_eq!(clean, "[00:00:00.015,777] <dbg> hsm: ENTRY(Advertising)");
     }
 }
