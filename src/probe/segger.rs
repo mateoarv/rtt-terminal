@@ -4,6 +4,7 @@ use std::env;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::time::Duration;
 
 #[allow(dead_code)]
 pub const JLINK_TIF_JTAG: i32 = 0;
@@ -274,6 +275,32 @@ impl SeggerJLink {
         } else {
             Ok(written as usize)
         }
+    }
+
+    /// Writes all outgoing bytes to the specified RTT Down channel, retrying until
+    /// the full slice is written or the timeout expires.
+    ///
+    /// Microcontrollers typically allocate a small RTT Down buffer (e.g. 16 bytes for Zephyr Shell),
+    /// so writing strings longer than 15 bytes requires chunked writes as the target consumes data.
+    pub fn write_all_rtt(&self, channel: u32, mut data: &[u8], timeout: Duration) -> Result<()> {
+        let mut last_progress = std::time::Instant::now();
+        while !data.is_empty() {
+            let written = self.write_rtt(channel, data)?;
+            if written > 0 {
+                data = &data[written..];
+                last_progress = std::time::Instant::now();
+            } else {
+                if last_progress.elapsed() > timeout {
+                    return Err(anyhow!(
+                        "Timeout ({}ms) waiting for target to consume RTT Down buffer on channel {}",
+                        timeout.as_millis(),
+                        channel
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        Ok(())
     }
 
     /// Triggers a hardware reset of the target device.

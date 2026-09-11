@@ -103,7 +103,7 @@ pub fn start_rtt_worker(
             while let Ok(cmd) = cmd_rx.try_recv() {
                 match cmd {
                     RttCommand::Write(channel, bytes) => {
-                        if let Err(e) = segger.write_rtt(channel as u32, &bytes) {
+                        if let Err(e) = segger.write_all_rtt(channel as u32, &bytes, Duration::from_millis(1000)) {
                             let _ = event_tx.send(RttEvent::Warning(format!("Write error on ch {}: {}", channel, e)));
                         }
                     }
