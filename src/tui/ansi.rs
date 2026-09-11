@@ -42,9 +42,43 @@ pub fn parse_ansi_to_line(text: &str) -> Line<'static> {
                 // 'm' denotes SGR (Select Graphic Rendition)
                 if cmd == b'm' {
                     apply_sgr_params(params_str, &mut current_style);
+                } else if cmd == b'C' {
+                    // CUF - Cursor Forward (Cursor Right by n columns)
+                    let count = if params_str.is_empty() {
+                        1
+                    } else {
+                        params_str.parse::<usize>().unwrap_or(1)
+                    };
+                    current_chunk.push_str(&" ".repeat(count));
+                } else if cmd == b'G' {
+                    // CHA - Cursor Horizontal Absolute (1-based)
+                    let current_col: usize = spans.iter().map(|s| s.content.chars().count()).sum::<usize>()
+                        + current_chunk.chars().count();
+                    let target_col = if params_str.is_empty() {
+                        0
+                    } else {
+                        params_str.parse::<usize>().unwrap_or(1).saturating_sub(1)
+                    };
+                    if target_col > current_col {
+                        current_chunk.push_str(&" ".repeat(target_col - current_col));
+                    }
+                } else if cmd == b'@' {
+                    // ICH - Insert Characters
+                    let count = if params_str.is_empty() {
+                        1
+                    } else {
+                        params_str.parse::<usize>().unwrap_or(1)
+                    };
+                    current_chunk.push_str(&" ".repeat(count));
                 }
                 // Other escape codes (like 'K' for clear line) are silently stripped
             }
+        } else if bytes[i] == b'\t' {
+            let current_col: usize = spans.iter().map(|s| s.content.chars().count()).sum::<usize>()
+                + current_chunk.chars().count();
+            let next_tab = (current_col / 8 + 1) * 8;
+            current_chunk.push_str(&" ".repeat(next_tab - current_col));
+            i += 1;
         } else if bytes[i] == b'\r' {
             // Ignore carriage return
             i += 1;
@@ -80,12 +114,46 @@ pub fn strip_ansi(text: &str) -> String {
     while i < len {
         if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
             i += 2;
+            let start = i;
             while i < len && !bytes[i].is_ascii_alphabetic() {
                 i += 1;
             }
             if i < len {
+                let cmd = bytes[i];
+                let params_str = &text[start..i];
                 i += 1;
+
+                if cmd == b'C' {
+                    let count = if params_str.is_empty() {
+                        1
+                    } else {
+                        params_str.parse::<usize>().unwrap_or(1)
+                    };
+                    result.push_str(&" ".repeat(count));
+                } else if cmd == b'G' {
+                    let current_col = result.chars().count();
+                    let target_col = if params_str.is_empty() {
+                        0
+                    } else {
+                        params_str.parse::<usize>().unwrap_or(1).saturating_sub(1)
+                    };
+                    if target_col > current_col {
+                        result.push_str(&" ".repeat(target_col - current_col));
+                    }
+                } else if cmd == b'@' {
+                    let count = if params_str.is_empty() {
+                        1
+                    } else {
+                        params_str.parse::<usize>().unwrap_or(1)
+                    };
+                    result.push_str(&" ".repeat(count));
+                }
             }
+        } else if bytes[i] == b'\t' {
+            let current_col = result.chars().count();
+            let next_tab = (current_col / 8 + 1) * 8;
+            result.push_str(&" ".repeat(next_tab - current_col));
+            i += 1;
         } else if bytes[i] == b'\r' {
             i += 1;
         } else if let Some(ch) = text[i..].chars().next() {
@@ -287,5 +355,27 @@ pub mod tests {
         let input = "\x1b[1;31m<error>\x1b[0m Failed at \x1b[4mline 42\x1b[0m\r\n";
         let clean = strip_ansi(input);
         assert_eq!(clean, "<error> Failed at line 42\n");
+    }
+
+    #[test]
+    fn test_cursor_forward_indentation() {
+        let input = "\x1b[13CUsage:";
+        let line = parse_ansi_to_line(input);
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(line.spans[0].content, "             Usage:");
+
+        let clean = strip_ansi(input);
+        assert_eq!(clean, "             Usage:");
+    }
+
+    #[test]
+    fn test_tab_expansion() {
+        let input = "cmd\targ";
+        let line = parse_ansi_to_line(input);
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(line.spans[0].content, "cmd     arg");
+
+        let clean = strip_ansi(input);
+        assert_eq!(clean, "cmd     arg");
     }
 }
