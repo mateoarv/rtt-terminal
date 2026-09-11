@@ -48,7 +48,7 @@ pub fn run_tui(
 ) -> Result<()> {
     while !state.should_quit {
         // 1. Render frame
-        terminal.draw(|f| ui::render(f, &state))?;
+        terminal.draw(|f| ui::render(f, &mut state))?;
 
         // 2. Process all pending events from RTT background worker
         while let Ok(event) = worker.event_rx.try_recv() {

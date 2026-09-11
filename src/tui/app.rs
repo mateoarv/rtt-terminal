@@ -17,6 +17,7 @@ pub struct AppState {
     pub max_logs: usize,
     pub scroll_offset: usize, // Lines scrolled up from the bottom (0 = at the latest line)
     pub auto_scroll: bool,
+    pub viewport_height: usize,
     incoming_buffer: String,
 
     // Input prompt state
@@ -51,6 +52,7 @@ impl AppState {
             max_logs: DEFAULT_MAX_LOGS,
             scroll_offset: 0,
             auto_scroll: true,
+            viewport_height: 20,
             incoming_buffer: String::new(),
 
             input: String::new(),
@@ -80,13 +82,20 @@ impl AppState {
 
     /// Appends a single line to the log buffer.
     pub fn add_log_line(&mut self, line: String) {
-        if self.logs.len() >= self.max_logs {
+        let popped = if self.logs.len() >= self.max_logs {
             self.logs.pop_front();
-        }
+            true
+        } else {
+            false
+        };
         self.logs.push_back(line);
 
         if self.auto_scroll {
             self.scroll_offset = 0;
+        } else if !popped {
+            // Keep the view stationary on screen while the user is inspecting historical logs
+            let max_scroll = self.logs.len().saturating_sub(self.viewport_height);
+            self.scroll_offset = (self.scroll_offset + 1).min(max_scroll);
         }
     }
 
@@ -97,8 +106,13 @@ impl AppState {
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
+        let max_scroll = self.logs.len().saturating_sub(self.viewport_height);
+        if max_scroll == 0 {
+            self.scroll_offset = 0;
+            self.auto_scroll = true;
+            return;
+        }
         self.auto_scroll = false;
-        let max_scroll = self.logs.len().saturating_sub(1);
         self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
     }
 
@@ -113,8 +127,14 @@ impl AppState {
 
     #[allow(dead_code)]
     pub fn scroll_to_top(&mut self) {
-        self.auto_scroll = false;
-        self.scroll_offset = self.logs.len().saturating_sub(1);
+        let max_scroll = self.logs.len().saturating_sub(self.viewport_height);
+        if max_scroll == 0 {
+            self.scroll_offset = 0;
+            self.auto_scroll = true;
+        } else {
+            self.auto_scroll = false;
+            self.scroll_offset = max_scroll;
+        }
     }
 
     #[allow(dead_code)]
@@ -271,5 +291,44 @@ mod tests {
         assert_eq!(submitted, "help");
         assert!(state.input.is_empty());
         assert_eq!(state.history.len(), 1);
+    }
+
+    #[test]
+    fn test_scroll_limits_and_clamping() {
+        let mut state = AppState::new(
+            "TestProbe".to_string(),
+            "nRF52840_xxAA".to_string(),
+            0,
+            "CRLF".to_string(),
+        );
+        state.viewport_height = 10;
+
+        // Add 50 lines (0..50)
+        for i in 0..50 {
+            state.add_log_line(format!("Line {}", i));
+        }
+
+        assert!(state.auto_scroll);
+        assert_eq!(state.scroll_offset, 0);
+
+        // Max scroll should be 50 - 10 = 40
+        // Scroll up by 15
+        state.scroll_up(15);
+        assert!(!state.auto_scroll);
+        assert_eq!(state.scroll_offset, 15);
+
+        // Scroll up beyond top
+        state.scroll_up(100);
+        assert_eq!(state.scroll_offset, 40); // Clamped at 40! Never exceeds max_scroll
+
+        // Scroll down partially
+        state.scroll_down(10);
+        assert_eq!(state.scroll_offset, 30);
+        assert!(!state.auto_scroll);
+
+        // Scroll down to bottom
+        state.scroll_down(50);
+        assert_eq!(state.scroll_offset, 0);
+        assert!(state.auto_scroll); // Auto-scroll re-engages
     }
 }

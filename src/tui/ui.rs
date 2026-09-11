@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use super::app::AppState;
 
-pub fn render(frame: &mut Frame, state: &AppState) {
+pub fn render(frame: &mut Frame, state: &mut AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -72,15 +72,20 @@ fn render_header(frame: &mut Frame, state: &AppState, area: ratatui::layout::Rec
     frame.render_widget(paragraph, area);
 }
 
-fn render_logs(frame: &mut Frame, state: &AppState, area: ratatui::layout::Rect) {
+fn render_logs(frame: &mut Frame, state: &mut AppState, area: ratatui::layout::Rect) {
     let visible_height = area.height.saturating_sub(2) as usize;
-    let total_logs = state.logs.len();
+    state.viewport_height = visible_height.max(1);
 
-    let title_scroll = if state.auto_scroll {
+    let total_logs = state.logs.len();
+    let max_scroll = total_logs.saturating_sub(visible_height);
+    let effective_scroll = state.scroll_offset.min(max_scroll);
+    state.scroll_offset = effective_scroll;
+
+    let title_scroll = if state.auto_scroll || effective_scroll == 0 {
         Span::styled(" [ Auto-Scroll: ON ] ", Style::default().fg(Color::Green))
     } else {
         Span::styled(
-            format!(" [ Scrolled: +{} ] ", state.scroll_offset),
+            format!(" [ Scrolled: +{} ] ", effective_scroll),
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         )
     };
@@ -92,14 +97,14 @@ fn render_logs(frame: &mut Frame, state: &AppState, area: ratatui::layout::Rect)
         .title_alignment(ratatui::layout::Alignment::Right)
         .border_style(Style::default().fg(Color::DarkGray));
 
-    // Slice visible lines based on scroll_offset
+    // Slice visible lines based on effective_scroll
     let lines_to_render: Vec<Line> = if total_logs == 0 {
         vec![Line::from(Span::styled(
             "Waiting for RTT output from microcontroller...",
             Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
         ))]
     } else {
-        let end_idx = total_logs.saturating_sub(state.scroll_offset);
+        let end_idx = total_logs.saturating_sub(effective_scroll);
         let start_idx = end_idx.saturating_sub(visible_height);
 
         state
@@ -113,9 +118,9 @@ fn render_logs(frame: &mut Frame, state: &AppState, area: ratatui::layout::Rect)
     frame.render_widget(paragraph, area);
 
     // Render scrollbar if total logs exceed visible area
-    if total_logs > visible_height {
-        let mut scrollbar_state = ScrollbarState::new(total_logs)
-            .position(total_logs.saturating_sub(state.scroll_offset));
+    if total_logs > visible_height && max_scroll > 0 {
+        let mut scrollbar_state = ScrollbarState::new(max_scroll)
+            .position(max_scroll.saturating_sub(effective_scroll));
         let scrollbar = Scrollbar::default()
             .orientation(ScrollbarOrientation::VerticalRight)
             .symbols(ratatui::symbols::scrollbar::VERTICAL);
