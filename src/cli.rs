@@ -34,6 +34,14 @@ pub struct Cli {
     /// End of line sequence to send on Enter (crlf, lf, cr, none)
     #[arg(long = "eol", default_value = "crlf")]
     pub eol: String,
+
+    /// Run in simulated mock mode without hardware
+    #[arg(short = 'm', long = "mock")]
+    pub mock: bool,
+
+    /// Run in basic headless console mode instead of TUI
+    #[arg(long = "headless")]
+    pub headless: bool,
 }
 
 #[cfg(test)]
