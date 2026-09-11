@@ -30,6 +30,10 @@ pub struct Cli {
     /// RTT channel to connect to initially (default: 0)
     #[arg(long = "channel", default_value_t = 0)]
     pub channel: usize,
+
+    /// End of line sequence to send on Enter (crlf, lf, cr, none)
+    #[arg(long = "eol", default_value = "crlf")]
+    pub eol: String,
 }
 
 #[cfg(test)]

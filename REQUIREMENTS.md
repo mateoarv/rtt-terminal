@@ -20,15 +20,16 @@ Las herramientas tradicionales de RTT (como *J-Link RTT Viewer* o clientes Telne
 - Pobre manejo de caídas de conexión cuando el microcontrolador se reinicia, se reprograma o entra en modos de bajo consumo.
 - Dificultad para alternar entre shells interactivas carácter por carácter y envíos de línea estructurados.
 
-`rtt-terminal` soluciona estos problemas combinando la potencia y seguridad de **Rust**, la biblioteca de depuración **`probe-rs`** y una interfaz moderna estilo **Ratatui**, inspirada en la ergonomía de las CLI modernas asistidas por comandos slash (`/`).
+`rtt-terminal` soluciona estos problemas combinando la potencia y seguridad de **Rust**, una arquitectura de conexión de hardware dual (enlace oficial con **Segger J-Link DLL** para multiplexación y coexistencia transparente con herramientas como VS Code, nRF Connect y Power Profiler, más soporte multiprobe con **`probe-rs`**) y una interfaz moderna estilo **Ratatui**, inspirada en la ergonomía de las CLI modernas asistidas por comandos slash (`/`).
 
 ---
 
 ## 2. Alcance del Proyecto (Scope)
 
 ### 2.1 En Alcance (In-Scope)
-- **Comunicación USB directa** con sondas Segger J-Link (sin requerir la instalación previa del J-Link Software Pack).
-- **Compatibilidad multiprobe:** Soporte nativo para CMSIS-DAP y ST-Link soportadas por `probe-rs`.
+- **Enlace oficial con Segger J-Link DLL (`JLink_x64.dll` / `JLinkARM.dll`):** Comunicación nativa que convive armónicamente con herramientas activas (VS Code, nRF Connect, Power Profiler Kit) utilizando el driver oficial de Segger (`jlink.sys`) sin requerir conversiones destructivas de driver vía Zadig.
+- **Multiplexación y Cero Conflictos:** Capacidad de abrir la terminal RTT mientras el firmware se flashea desde VS Code o se alimenta con el Power Profiler.
+- **Compatibilidad multiprobe:** Soporte para CMSIS-DAP y ST-Link mediante `probe-rs`.
 - **Detección automática** del bloque de control RTT (`_SEGGER_RTT`) en la memoria RAM del microcontrolador.
 - **Interfaz de terminal interactiva (TUI)** de vista única enfocada.
 - **Entrada dual:**
@@ -55,7 +56,7 @@ Las herramientas tradicionales de RTT (como *J-Link RTT Viewer* o clientes Telne
 | Componente | Tecnología Seleccionada | Justificación |
 | :--- | :--- | :--- |
 | **Lenguaje** | Rust (Edición 2024, MSRV 1.85+) | Seguridad de memoria, alto rendimiento, nuevo resolver v3 de Cargo, concurrencia sin data races y binario único. |
-| **Backend de Hardware** | `probe-rs` | Driver nativo de sondas USB (J-Link, CMSIS-DAP) y motor de RTT en RAM sin dependencias C/C++ externas. |
+| **Backend de Hardware** | **Segger J-Link DLL (`libloading`)** + `probe-rs` | Integración oficial con la DLL de Segger (`JLink_x64.dll`) para compatibilidad directa con el driver `jlink.sys`, multiplexación con VS Code/Power Profiler y APIs RTT nativas; más `probe-rs` para sondas universales. |
 | **Interfaz de Usuario** | `ratatui` + `crossterm` | Renderizado TUI moderno, reactivo, con soporte completo de eventos de teclado y mouse. |
 | **Parsing de CLI** | `clap` (derive) | Parseo robusto y tipado de argumentos de línea de comandos. |
 | **Búsqueda Difusa** | `fuzzy-matcher` | Algoritmo de filtrado ultrarrápido para seleccionar chips entre el catálogo de `probe-rs`. |

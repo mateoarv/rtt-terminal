@@ -1,5 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
+use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
 
 mod cli;
 mod probe;
@@ -7,6 +11,7 @@ mod probe;
 use cli::Cli;
 use probe::detector::{get_connected_probes, print_probes};
 use probe::targets::{print_search_results, search_targets, validate_target};
+use probe::worker::{start_rtt_worker, RttCommand, RttEvent};
 
 fn main() -> Result<()> {
     let args = Cli::parse();
@@ -24,46 +29,121 @@ fn main() -> Result<()> {
     }
 
     if let Some(chip_name) = args.chip {
-        println!("Validating target microcontroller '{}'...", chip_name);
-        match validate_target(&chip_name) {
-            Ok(target) => {
-                println!("Target '{}' is supported by probe-rs!", target.name);
-                println!("Cores detected in target description: {}", target.cores.len());
-                for (idx, core) in target.cores.iter().enumerate() {
-                    println!("  Core [{}]: {} (Type: {:?})", idx, core.name, core.core_type);
-                }
+        // Validate target
+        let target = validate_target(&chip_name)?;
+        println!("Target confirmed: {} ({} core(s))", target.name, target.cores.len());
 
-                // Check connected probes
-                println!();
-                let probes = get_connected_probes()?;
-                if probes.is_empty() {
-                    println!("Warning: No debug probe detected. Connect your Segger J-Link via USB.");
-                } else {
-                    println!("Ready to connect with {} detected probe(s):", probes.len());
-                    for (i, p) in probes.iter().enumerate() {
-                        let serial = p.serial_number.as_deref().unwrap_or("<No Serial>");
-                        println!("  [{}] {} (Serial: {})", i, p.identifier, serial);
+        let eol_bytes = match args.eol.to_lowercase().as_str() {
+            "crlf" => b"\r\n".as_slice(),
+            "lf" => b"\n".as_slice(),
+            "cr" => b"\r".as_slice(),
+            "none" => b"".as_slice(),
+            other => {
+                eprintln!("Warning: unknown EOL '{}', defaulting to CRLF", other);
+                b"\r\n".as_slice()
+            }
+        };
+
+        println!("Starting RTT session for '{}' at {} kHz...", chip_name, args.speed);
+        println!("Connecting via probe {:?}...", args.probe.as_deref().unwrap_or("auto"));
+
+        let worker = start_rtt_worker(
+            args.probe.clone(),
+            chip_name.clone(),
+            args.speed,
+            args.channel,
+        )?;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
+        let cmd_tx_ctrlc = worker.cmd_tx.clone();
+
+        ctrlc::set_handler(move || {
+            r.store(false, Ordering::SeqCst);
+            let _ = cmd_tx_ctrlc.send(RttCommand::Stop);
+        }).expect("Error setting Ctrl-C handler");
+
+        // Stdin reader thread for sending user input down to the target
+        let cmd_tx_stdin = worker.cmd_tx.clone();
+        let running_stdin = running.clone();
+        let channel = args.channel;
+        let eol_vec = eol_bytes.to_vec();
+
+        thread::spawn(move || {
+            let stdin = io::stdin();
+            let mut handle = stdin.lock();
+            let mut line = String::new();
+
+            while running_stdin.load(Ordering::SeqCst) {
+                line.clear();
+                match handle.read_line(&mut line) {
+                    Ok(0) => break, // EOF
+                    Ok(_) => {
+                        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+                        let mut bytes_to_send = trimmed.as_bytes().to_vec();
+                        bytes_to_send.extend_from_slice(&eol_vec);
+                        let _ = cmd_tx_stdin.send(RttCommand::Write(channel, bytes_to_send));
                     }
+                    Err(_) => break,
                 }
             }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                println!();
-                println!("Searching for similar chip names...");
-                if let Ok(suggestions) = search_targets(&chip_name, 5) {
-                    if !suggestions.is_empty() {
-                        println!("Did you mean:");
-                        for s in suggestions {
-                            println!("  - {}", s.name);
-                        }
+        });
+
+        // Event processing loop (Main thread)
+        let mut attached = false;
+        while running.load(Ordering::SeqCst) {
+            match worker.event_rx.recv() {
+                Ok(RttEvent::Connected { probe_name, target_name }) => {
+                    println!("Debug probe connected: {} -> {}", probe_name, target_name);
+                    println!("Searching for _SEGGER_RTT control block in RAM...");
+                }
+                Ok(RttEvent::Attached { up_channels, down_channels }) => {
+                    attached = true;
+                    println!("RTT Control Block successfully located in RAM!");
+                    println!("  Up Channels ({}):", up_channels.len());
+                    for ch in &up_channels {
+                        println!("    [{}] \"{}\" (buffer: {} B)", ch.number, ch.name, ch.buffer_size);
                     }
+                    println!("  Down Channels ({}):", down_channels.len());
+                    for ch in &down_channels {
+                        println!("    [{}] \"{}\" (buffer: {} B)", ch.number, ch.name, ch.buffer_size);
+                    }
+                    println!("{:-<75}", "");
+                    println!("RTT Streaming started on Channel {}. Type commands + Enter to send.", args.channel);
+                    println!("Press Ctrl+C to terminate session.");
+                    println!("{:-<75}", "");
+                }
+                Ok(RttEvent::Data { channel, data }) => {
+                    if channel == args.channel || !attached {
+                        let mut stdout = io::stdout().lock();
+                        let _ = stdout.write_all(&data);
+                        let _ = stdout.flush();
+                    }
+                }
+                Ok(RttEvent::Warning(w)) => {
+                    eprintln!("\n[RTT Warning] {}", w);
+                }
+                Ok(RttEvent::Error(e)) => {
+                    eprintln!("\n[RTT Error] {}", e);
+                    break;
+                }
+                Ok(RttEvent::Stopped) => {
+                    break;
+                }
+                Err(_) => {
+                    break;
                 }
             }
         }
+
+        println!("\nSession terminated. Cleaning up probe connection...");
+        let _ = worker.cmd_tx.send(RttCommand::Stop);
+        let _ = worker.thread_handle.join();
+        println!("Done. Disconnected cleanly.");
         return Ok(());
     }
 
-    // Default behavior when no arguments are provided
+    // Default message
     println!("rtt-terminal v{}", env!("CARGO_PKG_VERSION"));
     println!("High-performance interactive RTT terminal for microcontrollers.");
     println!();
@@ -75,7 +155,7 @@ fn main() -> Result<()> {
     println!("Usage examples:");
     println!("  rtt-terminal --list-probes               # List connected probes");
     println!("  rtt-terminal --search-chip <query>       # Search target chips (fuzzy match)");
-    println!("  rtt-terminal --chip <CHIP_NAME>          # Validate and test chip configuration");
+    println!("  rtt-terminal --chip nRF52840_xxAA        # Connect and stream RTT from target");
     println!("  rtt-terminal --help                      # Show all CLI options");
 
     Ok(())
