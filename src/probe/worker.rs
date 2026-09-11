@@ -30,6 +30,7 @@ pub enum RttEvent {
         channel: usize,
         data: Vec<u8>,
     },
+    Info(String),
     Warning(String),
     Error(String),
     Stopped,
@@ -54,6 +55,10 @@ pub fn start_rtt_worker(
     let thread_handle = thread::spawn(move || {
         let segger = match SeggerJLink::open(&chip_name, speed_khz) {
             Ok(s) => {
+                let _ = event_tx.send(RttEvent::Info(format!(
+                    "Loaded Segger J-Link DLL: {:?}",
+                    s.dll_path
+                )));
                 let sn = s.get_serial_number();
                 let _ = event_tx.send(RttEvent::Connected {
                     probe_name: format!("J-Link (Serial: {:08})", sn),

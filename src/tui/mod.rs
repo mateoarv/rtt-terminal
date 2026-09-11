@@ -22,7 +22,8 @@ pub fn init_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
-    let terminal = Terminal::new(backend)?;
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
 
     // Set panic hook to cleanly restore terminal if an unhandled panic occurs
     let original_hook = std::panic::take_hook();
@@ -53,6 +54,9 @@ pub fn run_tui(
         // 2. Process all pending events from RTT background worker
         while let Ok(event) = worker.event_rx.try_recv() {
             match event {
+                RttEvent::Info(info) => {
+                    state.add_log_line(format!("[System] {}", info));
+                }
                 RttEvent::Connected { probe_name, target_name } => {
                     state.probe_name = probe_name;
                     state.target_name = target_name;

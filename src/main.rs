@@ -158,6 +158,9 @@ fn run_headless(args: Cli, chip_name: String, core_count: usize) -> Result<()> {
     let mut attached = false;
     while running.load(Ordering::SeqCst) {
         match worker.event_rx.recv() {
+            Ok(RttEvent::Info(info)) => {
+                println!("{}", info);
+            }
             Ok(RttEvent::Connected { probe_name, target_name }) => {
                 println!("Debug probe connected: {} -> {}", probe_name, target_name);
                 println!("Searching for _SEGGER_RTT control block in RAM...");

@@ -60,6 +60,7 @@ pub fn find_jlink_dll() -> Option<PathBuf> {
 
 pub struct SeggerJLink {
     _lib: Library,
+    pub dll_path: PathBuf,
     fn_close: unsafe extern "C" fn(),
     fn_is_open: unsafe extern "C" fn() -> i32,
     fn_exec_command: unsafe extern "C" fn(*const c_char, *mut c_char, i32) -> i32,
@@ -83,8 +84,6 @@ impl SeggerJLink {
     pub fn open(device: &str, speed_khz: u32) -> Result<Self> {
         let dll_path = find_jlink_dll()
             .ok_or_else(|| anyhow!("Could not find JLink_x64.dll. Please install Segger J-Link Software Pack."))?;
-
-        println!("Loaded Segger J-Link DLL: {:?}", dll_path);
 
         let lib = unsafe { Library::new(&dll_path) }
             .map_err(|e| anyhow!("Failed to load JLink DLL at {:?}: {}", dll_path, e))?;
@@ -172,6 +171,7 @@ impl SeggerJLink {
 
             let segger = Self {
                 _lib: lib,
+                dll_path,
                 fn_close,
                 fn_is_open,
                 fn_exec_command,
